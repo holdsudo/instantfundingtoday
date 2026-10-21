@@ -34,7 +34,7 @@ function json(req, body, status = 200) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (url.pathname !== '/api/applications') return json(req, { ok: false, message: 'Not found.' }, 404);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(req) });
@@ -85,6 +85,61 @@ export default {
       console.error('insert failed', id, e && e.message);
       return json(req, { ok: false, message: 'Unable to submit application.' }, 500);
     }
+    // Alert the owner. Never blocks or fails the submission; the record is already saved.
+    if (env.NOTIFY_URL && env.NOTIFY_KEY) ctx.waitUntil(notify(env, id, rec));
     return json(req, { ok: true, submissionId: id, message: 'Application submitted successfully.' });
   },
 };
+
+// Sends a summary to the NOTIFY_URL relay (a Google Apps Script in the owner's Gmail).
+// Masks the tax ID and leaves out the home address; the full record stays in D1.
+async function notify(env, id, rec) {
+  try {
+    const oneLine = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim();
+    const money = (v) => (String(v || '').replace(/[^\d]/g, '') ? '$' + Number(String(v).replace(/[^\d]/g, '')).toLocaleString('en-US') : '');
+    const tax = String(rec.federalTaxId || '').replace(/[^\d]/g, '');
+    const row = (k, v) => (v ? k + ': ' + v : null);
+    const lines = [
+      row('Reference', id),
+      row('Received', new Date().toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }) + ' ET'),
+      '',
+      row('Requested', money(rec.requestedAmount)),
+      row('Purpose', oneLine(rec.useOfFunds)),
+      '',
+      row('Business', oneLine(rec.legalBusinessName)),
+      row('DBA', oneLine(rec.dbaName)),
+      row('Entity', oneLine(rec.entityType)),
+      row('Industry', oneLine(rec.industry)),
+      row('Started', oneLine(rec.businessStartDate)),
+      row('Location', [rec.businessCity, rec.businessState, rec.businessZip].map(oneLine).filter(Boolean).join(', ')),
+      row('Tax ID', tax ? '***-**' + tax.slice(-4) : ''),
+      '',
+      row('Owner', [oneLine(rec.ownerFullName), oneLine(rec.ownerTitle)].filter(Boolean).join(', ')),
+      row('Ownership', oneLine(rec.ownershipPercentage) && oneLine(rec.ownershipPercentage) + '%'),
+      row('Phone', oneLine(rec.ownerPhone)),
+      row('Email', oneLine(rec.ownerEmail)),
+      '',
+      row('Monthly revenue', money(rec.averageMonthlyRevenue)),
+      row('Monthly deposits', money(rec.averageMonthlyBankDeposits)),
+      row('Card volume', money(rec.monthlyCreditCardProcessingVolume)),
+      row('Bank', oneLine(rec.primaryBankName)),
+      row('Time with bank', oneLine(rec.timeWithBank)),
+      row('Existing financing', oneLine(rec.existingBusinessLoansOrAdvances)),
+      row('Balance owed', money(rec.currentBalanceOnExistingFinancing)),
+      row('NSF/overdrafts (3 mo)', oneLine(rec.nsfOrOverdraftCountLast3Months)),
+      '',
+      'Full record (including home address and full tax ID) is in the Cloudflare D1 database ift-applications.',
+    ].filter((l) => l !== null);
+    await fetch(env.NOTIFY_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({
+        key: env.NOTIFY_KEY,
+        subject: ('New application: ' + (oneLine(rec.legalBusinessName) || 'unnamed business') + ' ' + money(rec.requestedAmount)).trim().slice(0, 150),
+        body: lines.join('\n'),
+      }),
+    });
+  } catch (e) {
+    console.error('notify failed', id, e && e.message);
+  }
+}
