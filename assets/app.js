@@ -17,7 +17,29 @@
 
   /* ---------- shared state (the request) ---------- */
   const DEFAULT_AMOUNT = 250000, MIN = 10000, MAX = 1000000;
-  const state = { amount: DEFAULT_AMOUNT, uses: new Set(['Payroll']) };
+  const state = { amount: DEFAULT_AMOUNT, uses: new Set(['Payroll']), business: '' };
+
+  /* ---------- amount in words ---------- */
+  const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+  const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+  const chunk = (n) => {
+    let out = '';
+    if (n >= 100) { out += ONES[Math.floor(n / 100)] + ' hundred'; n %= 100; if (n) out += ' '; }
+    if (n >= 20) { out += TENS[Math.floor(n / 10)]; if (n % 10) out += '-' + ONES[n % 10]; } else if (n > 0) out += ONES[n];
+    return out;
+  };
+  const words = (v) => {
+    const n = Math.min(Math.floor(Number(v) || 0), 999999999999);
+    if (n <= 0) return 'Zero';
+    const parts = [];
+    const b = Math.floor(n / 1e9), m = Math.floor((n % 1e9) / 1e6), t = Math.floor((n % 1e6) / 1e3), r = n % 1e3;
+    if (b) parts.push(chunk(b) + ' billion'); if (m) parts.push(chunk(m) + ' million'); if (t) parts.push(chunk(t) + ' thousand'); if (r) parts.push(chunk(r));
+    const txt = parts.join(' ');
+    return txt.charAt(0).toUpperCase() + txt.slice(1);
+  };
+  const now = new Date();
+  const ymd = String(now.getFullYear()) + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
+  $$('[data-date]').forEach((el) => { el.textContent = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); });
 
   /* ---------- header ---------- */
   const top = $('[data-top]');
@@ -36,21 +58,42 @@
     rev.forEach((el) => io.observe(el));
   } else rev.forEach((el) => el.classList.add('is-in'));
 
-  /* ---------- hero request card ---------- */
+  /* ---------- the route: a line that fills as you read ---------- */
+  const rail = $('[data-rail]');
+  if (rail) {
+    const steps = $$('.rstep', rail);
+    const upd = () => {
+      const r = rail.getBoundingClientRect();
+      const p = Math.min(1, Math.max(0, (window.innerHeight * 0.6 - r.top) / r.height));
+      rail.style.setProperty('--p', p.toFixed(3));
+      steps.forEach((st) => st.classList.toggle('is-lit', st.offsetTop + 17 <= p * rail.offsetHeight));
+    };
+    upd(); window.addEventListener('scroll', upd, { passive: true }); window.addEventListener('resize', upd);
+  }
+
+  /* ---------- the draft (hero) ---------- */
   const heroForm = $('[data-hero-form]');
   const heroNum = $('#hero-amount-num');
   const heroRange = $('[data-hero-range]');
+  const heroName = $('#hero-name');
 
   const setFill = () => { if (!heroRange) return; const p = ((Math.min(Math.max(state.amount, MIN), MAX) - MIN) / (MAX - MIN)) * 100; heroRange.style.setProperty('--fill', p + '%'); };
   function syncAmount(from) {
     const f = fmtMoney(state.amount);
     if (heroNum && from !== 'hero-num') heroNum.value = f;
     if (heroRange && from !== 'range') heroRange.value = Math.min(MAX, Math.max(MIN, state.amount || MIN));
+    $$('[data-words]').forEach((el) => { el.textContent = words(state.amount); });
+    $$('[data-micr]').forEach((el) => { el.textContent = '⑆ ' + ymd + ' ⑆ ' + String(state.amount || 0).padStart(10, '0') + ' ⑈'; });
     const fa = $('#f-requestedAmount'); if (fa && from !== 'form') fa.value = f;
     setFill(); renderMini();
   }
   if (heroNum) heroNum.addEventListener('input', () => { state.amount = Number(digits(heroNum.value)) || 0; heroNum.value = fmtMoney(heroNum.value); syncAmount('hero-num'); });
   if (heroRange) heroRange.addEventListener('input', () => { state.amount = Number(heroRange.value); syncAmount('range'); });
+  if (heroName) heroName.addEventListener('input', () => {
+    state.business = heroName.value;
+    const fb = $('#f-legalBusinessName'); if (fb) fb.value = heroName.value;
+    renderMini();
+  });
 
   const useGroups = $$('[data-hero-uses], [data-form-uses]');
   function paintUses() { useGroups.forEach((g) => $$('.chip', g).forEach((c) => c.setAttribute('aria-pressed', String(state.uses.has(c.dataset.use))))); }
@@ -60,12 +103,24 @@
     paintUses(); renderMini();
   }));
 
+  // A whisper of tilt on the draft (fine pointers only)
+  if (heroForm && !reduce && matchMedia('(hover: hover) and (pointer: fine)').matches) {
+    heroForm.addEventListener('pointermove', (e) => {
+      const r = heroForm.getBoundingClientRect();
+      heroForm.style.setProperty('--ry', (((e.clientX - r.left) / r.width - .5) * 2.4).toFixed(2) + 'deg');
+      heroForm.style.setProperty('--rx', ((.5 - (e.clientY - r.top) / r.height) * 2.4).toFixed(2) + 'deg');
+    });
+    heroForm.addEventListener('pointerleave', () => { heroForm.style.removeProperty('--rx'); heroForm.style.removeProperty('--ry'); });
+  }
   if (heroForm) heroForm.addEventListener('submit', (e) => e.preventDefault());
-  $('[data-hero-go]')?.addEventListener('click', () => setTimeout(() => $('#f-requestedAmount')?.focus({ preventScroll: true }), 700));
+  $('[data-hero-go]')?.addEventListener('click', () => setTimeout(() => {
+    const target = state.business ? $('#f-requestedAmount') : $('#f-requestedAmount');
+    target?.focus({ preventScroll: true });
+  }, 700));
 
   /* ---------- the application ---------- */
   const form = $('[data-app-form]');
-  if (!form) { syncAmount(); return; }
+  if (!form) return;
   const parts = $$('[data-part]', form);
   const segs = $$('.p-seg');
   const label = $('[data-progress-label]');
@@ -90,11 +145,15 @@
     function renderMini() {
     const set = (k, v) => { const el = $(`[data-mini="${k}"]`); if (el) el.textContent = v || '—'; };
     set('amount', state.amount ? '$' + fmtMoney(state.amount) : '—');
+    set('words', state.amount ? words(state.amount) + ' and 00/100 dollars' : '');
     set('uses', [...state.uses].join(', '));
     set('business', val('legalBusinessName'));
     set('owner', val('ownerFullName'));
   }
-  form.addEventListener('input', renderMini);
+  form.addEventListener('input', (e) => {
+    if (e.target.name === 'legalBusinessName') { state.business = e.target.value; if (heroName) heroName.value = e.target.value; }
+    renderMini();
+  });
 
   function setErr(name, text) {
     const el = $(`[data-err-for="${name}"]`, form); if (el) el.textContent = text || '';
@@ -190,7 +249,7 @@
       $('[data-done-no]').textContent = String(data.submissionId);
       form.hidden = true; $('.progress').hidden = true; label.hidden = true;
       const done = $('[data-done]'); done.hidden = false; done.focus();
-      form.reset(); state.uses = new Set(['Payroll']); state.amount = DEFAULT_AMOUNT; paintUses(); syncAmount();
+      form.reset(); state.uses = new Set(['Payroll']); state.amount = DEFAULT_AMOUNT; state.business = ''; if (heroName) heroName.value = ''; paintUses(); syncAmount();
       done.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
     } catch (err) {
       msg.textContent = (err && err.message && err.message !== 'Failed to fetch') ? err.message : 'We could not send your request just now. Please check your connection and try again in a moment.';
@@ -199,4 +258,22 @@
   });
 
   paintUses(); syncAmount(); go(0, false);
+
+  // The amount counts up as the draft prints; any interaction cancels it.
+  if (!reduce && heroNum) {
+    let live = true;
+    const stop = (e) => { live = false; if (e && e.type === 'pointerdown' && state.amount !== DEFAULT_AMOUNT) { state.amount = DEFAULT_AMOUNT; syncAmount('count'); } };
+    document.addEventListener('input', stop, { once: true });
+    document.addEventListener('pointerdown', stop, { once: true });
+    const t0 = performance.now();
+    state.amount = 0; syncAmount('count');
+    const tick = (t) => {
+      if (!live) { if (state.amount === 0) { state.amount = DEFAULT_AMOUNT; syncAmount('count'); } return; }
+      const k = Math.min(1, Math.max(0, (t - t0 - 900) / 1400));
+      state.amount = k >= 1 ? DEFAULT_AMOUNT : Math.round((DEFAULT_AMOUNT * (1 - Math.pow(1 - k, 3))) / 5000) * 5000;
+      syncAmount('count');
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
 })();
