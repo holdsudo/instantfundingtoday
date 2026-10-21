@@ -15,12 +15,13 @@
   const short = (n) => (n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'K' : '$' + n);
   $('[data-year]') && ($('[data-year]').textContent = new Date().getFullYear());
 
-  /* ---------- shared state (the ticket) ---------- */
-  const state = { amount: 50000, uses: new Set(['Payroll']) };
+  /* ---------- shared state (the request) ---------- */
+  const DEFAULT_AMOUNT = 250000, MIN = 10000, MAX = 1000000;
+  const state = { amount: DEFAULT_AMOUNT, uses: new Set(['Payroll']) };
 
   /* ---------- header ---------- */
   const top = $('[data-top]');
-  const onScroll = () => top && top.classList.toggle('is-stuck', window.scrollY > 6);
+  const onScroll = () => top && top.classList.toggle('is-stuck', !$('.hero') || window.scrollY > 6);
   onScroll(); window.addEventListener('scroll', onScroll, { passive: true });
 
   /* ---------- reveal ---------- */
@@ -35,37 +36,18 @@
     rev.forEach((el) => io.observe(el));
   } else rev.forEach((el) => el.classList.add('is-in'));
 
-  /* ---------- barcode (decorative, derived from the amount) ---------- */
-  function drawBarcode(svg, seed, h) {
-    if (!svg) return;
-    let x = 4, out = '', n = Number(seed) || 1, i = 0;
-    const rnd = () => { n = (n * 1103515245 + 12345 + i++) % 2147483647; return n / 2147483647; };
-    while (x < 236) {
-      const w = 1 + Math.floor(rnd() * 4), gap = 1 + Math.floor(rnd() * 3);
-      out += `<rect x="${x}" y="0" width="${w}" height="${h}" fill="currentColor"/>`;
-      x += w + gap;
-    }
-    svg.innerHTML = out;
-  }
-
-  /* ---------- hero ticket ---------- */
-  const heroForm = $('[data-hero-ticket]');
+  /* ---------- hero request card ---------- */
+  const heroForm = $('[data-hero-form]');
   const heroNum = $('#hero-amount-num');
   const heroRange = $('[data-hero-range]');
-  const stubAmt = $('[data-stub-amt]');
-  const bc = $('[data-barcode]');
-  const bcMini = $('[data-barcode-mini]');
-  const ticketNo = $('[data-ticket-no]');
-  if (ticketNo) ticketNo.textContent = String(Math.floor(1000 + Math.random() * 8999));
 
-  const setFill = () => { if (!heroRange) return; const p = ((Math.min(Math.max(state.amount, 5000), 500000) - 5000) / 495000) * 100; heroRange.style.setProperty('--fill', p + '%'); };
+  const setFill = () => { if (!heroRange) return; const p = ((Math.min(Math.max(state.amount, MIN), MAX) - MIN) / (MAX - MIN)) * 100; heroRange.style.setProperty('--fill', p + '%'); };
   function syncAmount(from) {
     const f = fmtMoney(state.amount);
     if (heroNum && from !== 'hero-num') heroNum.value = f;
-    if (heroRange && from !== 'range') heroRange.value = Math.min(500000, Math.max(5000, state.amount || 5000));
-    if (stubAmt) stubAmt.textContent = '$' + (f || '0');
+    if (heroRange && from !== 'range') heroRange.value = Math.min(MAX, Math.max(MIN, state.amount || MIN));
     const fa = $('#f-requestedAmount'); if (fa && from !== 'form') fa.value = f;
-    setFill(); drawBarcode(bc, state.amount, 44); drawBarcode(bcMini, state.amount + 7, 36); renderMini();
+    setFill(); renderMini();
   }
   if (heroNum) heroNum.addEventListener('input', () => { state.amount = Number(digits(heroNum.value)) || 0; heroNum.value = fmtMoney(heroNum.value); syncAmount('hero-num'); });
   if (heroRange) heroRange.addEventListener('input', () => { state.amount = Number(heroRange.value); syncAmount('range'); });
@@ -78,16 +60,6 @@
     paintUses(); renderMini();
   }));
 
-  // Pointer tilt on the hero ticket (fine pointers only)
-  const stage = $('[data-tilt-stage]');
-  if (stage && heroForm && !reduce && matchMedia('(hover: hover) and (pointer: fine)').matches) {
-    stage.addEventListener('pointermove', (e) => {
-      const r = stage.getBoundingClientRect();
-      heroForm.style.setProperty('--ry', (((e.clientX - r.left) / r.width - .5) * 8).toFixed(2) + 'deg');
-      heroForm.style.setProperty('--rx', ((.5 - (e.clientY - r.top) / r.height) * 8).toFixed(2) + 'deg');
-    });
-    stage.addEventListener('pointerleave', () => { heroForm.style.removeProperty('--rx'); heroForm.style.removeProperty('--ry'); });
-  }
   if (heroForm) heroForm.addEventListener('submit', (e) => e.preventDefault());
   $('[data-hero-go]')?.addEventListener('click', () => setTimeout(() => $('#f-requestedAmount')?.focus({ preventScroll: true }), 700));
 
@@ -115,8 +87,7 @@
   });
 
   const val = (n) => (form.elements[n]?.value || '').trim();
-  const initials = () => '';
-  function renderMini() {
+    function renderMini() {
     const set = (k, v) => { const el = $(`[data-mini="${k}"]`); if (el) el.textContent = v || '—'; };
     set('amount', state.amount ? '$' + fmtMoney(state.amount) : '—');
     set('uses', [...state.uses].join(', '));
@@ -150,7 +121,7 @@
     }
     if (i === 4) {
       const ok = form.elements.accuracyConsent.checked && form.elements.contactConsent.checked;
-      setErr('consent', ok ? '' : 'Please tick both boxes to send your ticket.');
+      setErr('consent', ok ? '' : 'Please tick both boxes to submit your request.');
       if (!ok) bad = form.elements.accuracyConsent;
     }
     return bad;
@@ -215,14 +186,14 @@
     try {
       const res = await fetch(ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data || !data.ok || !data.submissionId) throw new Error((data && data.message) || 'We could not send your ticket. Please try again.');
+      if (!res.ok || !data || !data.ok || !data.submissionId) throw new Error((data && data.message) || 'We could not send your request. Please try again.');
       $('[data-done-no]').textContent = String(data.submissionId);
       form.hidden = true; $('.progress').hidden = true; label.hidden = true;
       const done = $('[data-done]'); done.hidden = false; done.focus();
-      form.reset(); state.uses = new Set(['Payroll']); state.amount = 50000; paintUses(); syncAmount();
+      form.reset(); state.uses = new Set(['Payroll']); state.amount = DEFAULT_AMOUNT; paintUses(); syncAmount();
       done.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
     } catch (err) {
-      msg.textContent = (err && err.message && err.message !== 'Failed to fetch') ? err.message : 'We could not send your ticket just now. Please check your connection and try again, or email info@instantfundingtoday.net.';
+      msg.textContent = (err && err.message && err.message !== 'Failed to fetch') ? err.message : 'We could not send your request just now. Please check your connection and try again in a moment.';
       msg.hidden = false; submitBtn.disabled = false; backBtn.disabled = false; submitBtn.firstChild.textContent = prev;
     }
   });
